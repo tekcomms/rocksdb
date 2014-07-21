@@ -93,7 +93,7 @@ struct DBImpl::CompactionState {
   Compaction* const compaction;
 
   // If there were two snapshots with seq numbers s1 and
-  // s2 and s1 < s2, and if we find two instances of a key k1 then lies
+  // s2 and s1 < s2, and if we find two instances of a key k1 that lies
   // entirely within s1 and s2, then the earlier version of k1 can be safely
   // deleted because that version is not visible in any snapshot.
   std::vector<SequenceNumber> existing_snapshots;
@@ -2338,7 +2338,8 @@ void DBImpl::AllocateCompactionOutputFileNumbers(CompactionState* compact) {
   mutex_.AssertHeld();
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
-  int filesNeeded = compact->compaction->num_input_files(1);
+  int filesNeeded = compact->compaction->num_input_files(
+      compact->compaction->num_input_levels() - 1);
   for (int i = 0; i < std::max(filesNeeded, 1); i++) {
     uint64_t file_number = versions_->NewFileNumber();
     pending_outputs_[file_number] = compact->compaction->GetOutputPathId();
