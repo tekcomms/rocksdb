@@ -202,4 +202,26 @@ class FIFOCompactionPicker : public CompactionPicker {
   }
 };
 
+class RocksCompactionPicker : public CompactionPicker {
+ public:
+  RocksCompactionPicker(const Options* options,
+                        const InternalKeyComparator* icmp)
+      : CompactionPicker(options, icmp) {}
+  virtual Compaction* PickCompaction(Version* version,
+                                     LogBuffer* log_buffer) override;
+
+  // Returns current_num_levels - 2, meaning the last level cannot be
+  // compaction input level.
+  virtual int MaxInputLevel(int current_num_levels) const override {
+    return current_num_levels - 2;
+  }
+
+ private:
+  // For the specfied level, pick a compaction.
+  // Returns nullptr if there is no compaction to be done.
+  // If level is 0 and there is already a compaction on that level, this
+  // function will return nullptr.
+  Compaction* PickCompactionBySize(Version* version, int level, double score);
+};
+
 }  // namespace rocksdb

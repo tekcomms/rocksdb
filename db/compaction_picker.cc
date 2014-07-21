@@ -998,4 +998,152 @@ Compaction* FIFOCompactionPicker::CompactRange(Version* version,
   return c;
 }
 
+Compaction* RocksCompactionPicker::PickCompaction(Version* version,
+                                                  LogBuffer* log_buffer) {
+  Compaction* c = nullptr;
+  int level = -1;
+
+  // Compute the compactions needed. It is better to do it here
+  // and also in LogAndApply(), otherwise the values could be stale.
+  std::vector<uint64_t> size_being_compacted(NumberLevels() - 1);
+  SizeBeingCompacted(size_being_compacted);
+  version->ComputeCompactionScore(size_being_compacted);
+
+  // We prefer compactions triggered by too much data in a level over
+  // the compactions triggered by seeks.
+  //
+  // Find the compactions by size on all levels.
+  for (int i = 0; i < NumberLevels() - 1; i++) {
+    assert(i == 0 ||
+           version->compaction_score_[i] <= version->compaction_score_[i - 1]);
+    level = version->compaction_level_[i];
+    if ((version->compaction_score_[i] >= 1)) {
+      c = PickCompactionBySize(version, level, version->compaction_score_[i]);
+      if (ExpandWhileOverlapping(c) == false) {
+        delete c;
+        c = nullptr;
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (c == nullptr) {
+    return nullptr;
+  }
+
+  // Two level 0 compaction won't run at the same time, so don't need to worry
+  // about files on level 0 being compacted.
+  if (level == 0) {
+    assert(compactions_in_progress_[0].empty());
+    InternalKey smallest, largest;
+    GetRange(c->inputs_[0].files, &smallest, &largest);
+    // Note that the next call will discard the file we placed in
+    // c->inputs_[0] earlier and replace it with an overlapping set
+    // which will include the picked file.
+    c->inputs_[0].clear();
+    c->input_version_->GetOverlappingInputs(0, &smallest, &largest,
+                                            &c->inputs_[0].files);
+
+    // If we include more L0 files in the same compaction run it can
+    // cause the 'smallest' and 'largest' key to get extended to a
+    // larger range. So, re-invoke GetRange to get the new key range
+    GetRange(c->inputs_[0].files, &smallest, &largest);
+    if (ParentRangeInCompaction(c->input_version_, &smallest, &largest, level,
+                                &c->parent_index_)) {
+      delete c;
+      return nullptr;
+    }
+    assert(!c->inputs_[0].empty());
+  }
+
+  // Setup "level+1" files (inputs_[1])
+  SetupOtherInputs(c);
+
+  // mark all the files that are being compacted
+  c->MarkFilesBeingCompacted(true);
+
+  // Is this compaction creating a file at the bottommost level
+  c->SetupBottomMostLevel(false);
+
+  // remember this currently undergoing compaction
+  compactions_in_progress_[level].insert(c);
+
+  return c;
+}
+
+Compaction* RocksCompactionPicker::PickCompactionBySize(Version* version,
+                                                        int level,
+                                                        double score) {
+  Compaction* c = nullptr;
+
+  // level 0 files are overlapping. So we cannot pick more
+  // than one concurrent compactions at this level. This
+  // could be made better by looking at key-ranges that are
+  // being compacted at level 0.
+  if (level == 0 && compactions_in_progress_[level].size() == 1) {
+    return nullptr;
+  }
+
+  assert(level >= 0);
+  assert(level + 1 < NumberLevels());
+  c = new Compaction(version, level, level + 1, MaxFileSizeForLevel(level + 1),
+                     MaxGrandParentOverlapBytes(level), 0,
+                     GetCompressionType(*options_, level + 1));
+  c->score_ = score;
+
+  // Pick the largest file in this level that is not already
+  // being compacted
+  std::vector<int>& file_size = c->input_version_->files_by_size_[level];
+
+  // record the first file that is not yet compacted
+  int nextIndex = -1;
+
+  for (unsigned int i = c->input_version_->next_file_to_compact_by_size_[level];
+       i < file_size.size(); i++) {
+    int index = file_size[i];
+    FileMetaData* f = c->input_version_->files_[level][index];
+
+    // Check to verify files are arranged in descending compensated size.
+    assert((i == file_size.size() - 1) ||
+           (i >= Version::number_of_files_to_sort_ - 1) ||
+           (f->compensated_file_size >=
+            c->input_version_->files_[level][file_size[i + 1]]->
+                compensated_file_size));
+
+    // do not pick a file to compact if it is being compacted
+    // from n-1 level.
+    if (f->being_compacted) {
+      continue;
+    }
+
+    // remember the startIndex for the next call to PickCompaction
+    if (nextIndex == -1) {
+      nextIndex = i;
+    }
+
+    // Do not pick this file if its parents at level+1 are being compacted.
+    // Maybe we can avoid redoing this work in SetupOtherInputs
+    int parent_index = -1;
+    if (ParentRangeInCompaction(c->input_version_, &f->smallest, &f->largest,
+                                level, &parent_index)) {
+      continue;
+    }
+    c->inputs_[0].files.push_back(f);
+    c->base_index_ = index;
+    c->parent_index_ = parent_index;
+    break;
+  }
+
+  if (c->inputs_[0].empty()) {
+    delete c;
+    c = nullptr;
+  }
+
+  // store where to start the iteration in the next call to PickCompaction
+  version->next_file_to_compact_by_size_[level] = nextIndex;
+
+  return c;
+}
+
 }  // namespace rocksdb

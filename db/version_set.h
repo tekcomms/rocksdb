@@ -247,6 +247,7 @@ class Version {
   friend class LevelCompactionPicker;
   friend class UniversalCompactionPicker;
   friend class FIFOCompactionPicker;
+  friend class RocksCompactionPicker;
   friend class ForwardIterator;
   friend class InternalStats;
 

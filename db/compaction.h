@@ -161,6 +161,7 @@ class Compaction {
   friend class UniversalCompactionPicker;
   friend class FIFOCompactionPicker;
   friend class LevelCompactionPicker;
+  friend class RocksCompactionPicker;
 
   Compaction(Version* input_version, int start_level, int out_level,
              uint64_t target_file_size, uint64_t max_grandparent_overlap_bytes,
