@@ -1024,7 +1024,8 @@ void Version::UpdateNumNonEmptyLevels() {
 
 void Version::UpdateFilesBySize() {
   if (cfd_->options()->compaction_style == kCompactionStyleFIFO ||
-      cfd_->options()->compaction_style == kCompactionStyleUniversal) {
+      cfd_->options()->compaction_style == kCompactionStyleUniversal ||
+      cfd_->options()->compaction_style == kCompactionStyleRocksUniversal) {
     // don't need this
     return;
   }

@@ -313,7 +313,8 @@ CompressionType GetCompressionFlush(const Options& options) {
 
   bool can_compress;
 
-  if (options.compaction_style == kCompactionStyleUniversal) {
+  if (options.compaction_style == kCompactionStyleUniversal ||
+      options.compaction_style == kCompactionStyleRocksUniversal) {
     can_compress =
         (options.compaction_options_universal.compression_size_percent < 0);
   } else {
@@ -1514,7 +1515,8 @@ Status DBImpl::WriteLevel0Table(ColumnFamilyData* cfd,
     // threads could be concurrently producing compacted files for
     // that key range.
     if (base != nullptr && options_.max_background_compactions <= 1 &&
-        cfd->options()->compaction_style == kCompactionStyleLevel) {
+        (cfd->options()->compaction_style == kCompactionStyleLevel ||
+         cfd->options()->compaction_style == kCompactionStyleRocksLevel)) {
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
     edit->AddFile(level, meta.fd.GetNumber(), meta.fd.GetPathId(),
@@ -1638,6 +1640,7 @@ Status DBImpl::CompactRange(ColumnFamilyHandle* column_family,
     // in case the compaction is unversal or if we're compacting the
     // bottom-most level, the output level will be the same as input one
     if (cfd->options()->compaction_style == kCompactionStyleUniversal ||
+        cfd->options()->compaction_style == kCompactionStyleRocksUniversal ||
         cfd->options()->compaction_style == kCompactionStyleFIFO ||
         level == max_level_with_files) {
       s = RunManualCompaction(cfd, level, level, begin, end);
@@ -1791,6 +1794,7 @@ Status DBImpl::RunManualCompaction(ColumnFamilyData* cfd, int input_level,
   // all files.
   if (begin == nullptr ||
       cfd->options()->compaction_style == kCompactionStyleUniversal ||
+      cfd->options()->compaction_style == kCompactionStyleRocksUniversal ||
       cfd->options()->compaction_style == kCompactionStyleFIFO) {
     manual.begin = nullptr;
   } else {
@@ -1799,6 +1803,7 @@ Status DBImpl::RunManualCompaction(ColumnFamilyData* cfd, int input_level,
   }
   if (end == nullptr ||
       cfd->options()->compaction_style == kCompactionStyleUniversal ||
+      cfd->options()->compaction_style == kCompactionStyleRocksUniversal ||
       cfd->options()->compaction_style == kCompactionStyleFIFO) {
     manual.end = nullptr;
   } else {
@@ -2299,6 +2304,8 @@ Status DBImpl::BackgroundCompaction(bool* madeProgress,
       // to the range that is left to be compacted.
       // Universal and FIFO compactions should always compact the whole range
       assert(m->cfd->options()->compaction_style != kCompactionStyleUniversal);
+      assert(m->cfd->options()->compaction_style !=
+             kCompactionStyleRocksUniversal);
       assert(m->cfd->options()->compaction_style != kCompactionStyleFIFO);
       m->tmp_storage = *manual_end;
       m->begin = &m->tmp_storage;
@@ -4639,7 +4646,8 @@ Status DB::Open(const DBOptions& db_options, const std::string& dbname,
                 std::vector<ColumnFamilyHandle*>* handles, DB** dbptr) {
   if (db_options.db_paths.size() > 1) {
     for (auto& cfd : column_families) {
-      if (cfd.options.compaction_style != kCompactionStyleUniversal) {
+      if (cfd.options.compaction_style != kCompactionStyleUniversal &&
+          cfd.options.compaction_style != kCompactionStyleRocksUniversal) {
         return Status::NotSupported(
             "More than one DB paths are only supported in "
             "universal compaction style. ");
@@ -4742,6 +4750,7 @@ Status DB::Open(const DBOptions& db_options, const std::string& dbname,
   if (s.ok()) {
     for (auto cfd : *impl->versions_->GetColumnFamilySet()) {
       if (cfd->options()->compaction_style == kCompactionStyleUniversal ||
+          cfd->options()->compaction_style == kCompactionStyleRocksUniversal ||
           cfd->options()->compaction_style == kCompactionStyleFIFO) {
         Version* current = cfd->current();
         for (int i = 1; i < current->NumberLevels(); ++i) {

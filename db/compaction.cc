@@ -110,7 +110,8 @@ void Compaction::AddInputDeletions(VersionEdit* edit) {
 
 bool Compaction::KeyNotExistsBeyondOutputLevel(const Slice& user_key) {
   assert(cfd_->options()->compaction_style != kCompactionStyleFIFO);
-  if (cfd_->options()->compaction_style == kCompactionStyleUniversal) {
+  if (cfd_->options()->compaction_style == kCompactionStyleUniversal ||
+      cfd_->options()->compaction_style == kCompactionStyleRocksUniversal) {
     return bottommost_level_;
   }
   // Maybe use binary search to find right entry instead of linear search?
@@ -174,7 +175,8 @@ void Compaction::MarkFilesBeingCompacted(bool mark_as_compacted) {
 // Is this compaction producing files at the bottommost level?
 void Compaction::SetupBottomMostLevel(bool is_manual) {
   assert(cfd_->options()->compaction_style != kCompactionStyleFIFO);
-  if (cfd_->options()->compaction_style == kCompactionStyleUniversal) {
+  if (cfd_->options()->compaction_style == kCompactionStyleUniversal ||
+      cfd_->options()->compaction_style == kCompactionStyleRocksUniversal) {
     // If universal compaction style is used and manual
     // compaction is occuring, then we are guaranteed that
     // all files will be picked in a single compaction
@@ -266,7 +268,8 @@ void Compaction::Summary(char* output, int len) {
 uint64_t Compaction::OutputFilePreallocationSize() {
   uint64_t preallocation_size = 0;
 
-  if (cfd_->options()->compaction_style == kCompactionStyleLevel) {
+  if (cfd_->options()->compaction_style == kCompactionStyleLevel ||
+      cfd_->options()->compaction_style == kCompactionStyleRocksLevel) {
     preallocation_size =
         cfd_->compaction_picker()->MaxFileSizeForLevel(output_level());
   } else {

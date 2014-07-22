@@ -225,16 +225,30 @@ ColumnFamilyData::ColumnFamilyData(const std::string& dbname, uint32_t id,
     internal_stats_.reset(
         new InternalStats(options_.num_levels, db_options->env));
     table_cache_.reset(new TableCache(&options_, storage_options, table_cache));
-    if (options_.compaction_style == kCompactionStyleUniversal) {
-      compaction_picker_.reset(
-          new UniversalCompactionPicker(&options_, &internal_comparator_));
-    } else if (options_.compaction_style == kCompactionStyleLevel) {
-      compaction_picker_.reset(
-          new LevelCompactionPicker(&options_, &internal_comparator_));
-    } else {
-      assert(options_.compaction_style == kCompactionStyleFIFO);
-      compaction_picker_.reset(
-          new FIFOCompactionPicker(&options_, &internal_comparator_));
+    switch (options_.compaction_style) {
+      case kCompactionStyleUniversal:
+        compaction_picker_.reset(
+            new UniversalCompactionPicker(&options_, &internal_comparator_));
+        break;
+      case kCompactionStyleLevel:
+        compaction_picker_.reset(
+            new LevelCompactionPicker(&options_, &internal_comparator_));
+        break;
+      case kCompactionStyleRocksLevel:
+        compaction_picker_.reset(
+            new RocksCompactionPickerLevelStyle(
+                &options_, &internal_comparator_));
+        break;
+      case kCompactionStyleRocksUniversal:
+        compaction_picker_.reset(
+            new RocksCompactionPickerUniversalStyle(
+                &options_, &internal_comparator_));
+        break;
+      case kCompactionStyleFIFO:
+      default:
+        compaction_picker_.reset(
+            new FIFOCompactionPicker(&options_, &internal_comparator_));
+        break;
     }
 
     Log(options_.info_log, "Options for column family \"%s\":\n",

@@ -53,9 +53,11 @@ enum CompressionType : char {
 };
 
 enum CompactionStyle : char {
-  kCompactionStyleLevel = 0x0,      // level based compaction style
-  kCompactionStyleUniversal = 0x1,  // Universal compaction style
-  kCompactionStyleFIFO = 0x2,       // FIFO compaction style
+  kCompactionStyleLevel = 0x0,           // level based compaction style
+  kCompactionStyleUniversal = 0x1,       // Universal compaction style
+  kCompactionStyleFIFO = 0x2,            // FIFO compaction style
+  kCompactionStyleRocksLevel = 0x3,      // optimized level based compaction
+  kCompactionStyleRocksUniversal = 0x4,  // optimized universal compaction
 };
 
 struct CompactionOptionsFIFO {

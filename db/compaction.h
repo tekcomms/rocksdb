@@ -46,6 +46,9 @@ class Compaction {
   // Outputs will go to this level
   int output_level() const { return output_level_; }
 
+  // Returns the total number of levels in the current DB.
+  int num_levels() const { return number_levels_; }
+
   // Returns the number of input levels in this compaction.
   int num_input_levels() const { return inputs_.size(); }
 
@@ -162,6 +165,8 @@ class Compaction {
   friend class FIFOCompactionPicker;
   friend class LevelCompactionPicker;
   friend class RocksCompactionPicker;
+  friend class RocksCompactionPickerUniversalStyle;
+  friend class RocksCompactionPickerLevelStyle;
 
   Compaction(Version* input_version, int start_level, int out_level,
              uint64_t target_file_size, uint64_t max_grandparent_overlap_bytes,

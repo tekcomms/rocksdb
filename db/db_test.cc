@@ -329,6 +329,8 @@ class DBTest {
     kDeletesFilterFirst,
     kHashSkipList,
     kUniversalCompaction,
+    kRocksLevelCompaction,
+    kRocksUniversalCompaction,
     kCompressedBlockCache,
     kInfiniteMaxOpenFiles,
     kxxHashChecksum,
@@ -389,7 +391,8 @@ class DBTest {
         continue;
       }
       if ((skip_mask & kSkipUniversalCompaction) &&
-          option_config_ == kUniversalCompaction) {
+          (option_config_ == kUniversalCompaction ||
+           option_config_ == kRocksUniversalCompaction)) {
         continue;
       }
       if ((skip_mask & kSkipMergePut) && option_config_ == kMergePut) {
@@ -433,15 +436,20 @@ class DBTest {
   bool ChangeCompactOptions(Options* prev_options = nullptr) {
     if (option_config_ == kDefault) {
       option_config_ = kUniversalCompaction;
-      if (prev_options == nullptr) {
-        prev_options = &last_options_;
-      }
-      Destroy(prev_options);
-      TryReopen();
-      return true;
+    } else if (option_config_ == kUniversalCompaction) {
+      option_config_ = kRocksLevelCompaction;
+    } else if (option_config_ == kRocksLevelCompaction) {
+      option_config_ = kRocksUniversalCompaction;
     } else {
       return false;
     }
+
+    if (prev_options == nullptr) {
+      prev_options = &last_options_;
+    }
+    Destroy(prev_options);
+    TryReopen();
+    return true;
   }
 
   // Return the current option configuration.
@@ -517,6 +525,12 @@ class DBTest {
         break;
       case kUniversalCompaction:
         options.compaction_style = kCompactionStyleUniversal;
+        break;
+      case kRocksLevelCompaction:
+        options.compaction_style = kCompactionStyleRocksLevel;
+        break;
+      case kRocksUniversalCompaction:
+        options.compaction_style = kCompactionStyleRocksUniversal;
         break;
       case kCompressedBlockCache:
         options.allow_mmap_writes = true;
@@ -2794,7 +2808,7 @@ TEST(DBTest, CompactionDeletionTrigger) {
   Options options = DeletionTriggerOptions();
   options.create_if_missing = true;
 
-  for (int tid = 0; tid < 2; ++tid) {
+  for (int tid = 0; tid < 4; ++tid) {
     uint64_t db_size[2];
 
     DestroyAndReopen(&options);
@@ -2821,8 +2835,20 @@ TEST(DBTest, CompactionDeletionTrigger) {
     ASSERT_GT(db_size[0] / 3, db_size[1]);
 
     // repeat the test with universal compaction
-    options.compaction_style = kCompactionStyleUniversal;
-    options.num_levels = 1;
+    switch (tid) {
+      case 0:
+        options.compaction_style = kCompactionStyleUniversal;
+        options.num_levels = 1;
+        break;
+      case 1:
+        options.compaction_style = kCompactionStyleRocksLevel;
+        options.num_levels = 8;
+        break;
+      case 2:
+        options.compaction_style = kCompactionStyleRocksUniversal;
+        options.num_levels = 1;
+        break;
+    }
   }
 }
 

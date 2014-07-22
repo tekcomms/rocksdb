@@ -11,6 +11,7 @@
 
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
+#include <algorithm>
 #include <limits>
 #include "db/filename.h"
 #include "util/log_buffer.h"
@@ -82,7 +83,9 @@ CompactionPicker::CompactionPicker(const Options* options,
   int target_file_size_multiplier = options_->target_file_size_multiplier;
   int max_bytes_multiplier = options_->max_bytes_for_level_multiplier;
   for (int i = 0; i < NumberLevels(); i++) {
-    if (i == 0 && options_->compaction_style == kCompactionStyleUniversal) {
+    if (i == 0 &&
+          (options_->compaction_style == kCompactionStyleUniversal ||
+           options_->compaction_style == kCompactionStyleRocksUniversal)) {
       max_file_size_[i] = ULLONG_MAX;
       level_max_bytes_[i] = options_->max_bytes_for_level_base;
     } else if (i > 1) {
@@ -344,7 +347,8 @@ Compaction* CompactionPicker::CompactRange(Version* version, int input_level,
 
   // All files are 'overlapping' in universal style compaction.
   // We have to compact the entire range in one shot.
-  if (options_->compaction_style == kCompactionStyleUniversal) {
+  if (options_->compaction_style == kCompactionStyleUniversal ||
+      options_->compaction_style == kCompactionStyleRocksUniversal) {
     begin = nullptr;
     end = nullptr;
   }
@@ -998,8 +1002,51 @@ Compaction* FIFOCompactionPicker::CompactRange(Version* version,
   return c;
 }
 
-Compaction* RocksCompactionPicker::PickCompaction(Version* version,
-                                                  LogBuffer* log_buffer) {
+Compaction* RocksCompactionPicker::PickCompaction(
+    Version* version, LogBuffer* log_buffer) {
+  // Pick a compaction
+  Compaction* c = PickCompactionInternal(version, log_buffer);
+
+  if (c == nullptr) {
+    return c;
+  }
+
+  // mark all the files that are being compacted
+  c->MarkFilesBeingCompacted(true);
+
+  // Is this compaction creating a file at the bottommost level
+  SetupBottomMostLevel(c, false);
+
+  // remember this currently undergoing compaction
+  compactions_in_progress_[c->level()].insert(c);
+
+  SetupFullCompaction(c);
+
+  return c;
+}
+
+void RocksCompactionPicker::SetupBottomMostLevel(
+    Compaction* c, bool is_manual_compaction) {
+  if (is_manual_compaction && FullCompactionOnManual()) {
+    c->bottommost_level_ = true;
+    return;
+  }
+  SetupBottomMostLevelInternal(c);
+}
+
+void RocksCompactionPickerLevelStyle::SetupBottomMostLevelInternal(
+    Compaction* c) {
+  c->bottommost_level_ = true;
+  for (int i = c->output_level() + 1; i < c->num_levels(); ++i) {
+    if (c->input_version()->NumLevelFiles(i) > 0) {
+      c->bottommost_level_ = false;
+      break;
+    }
+  }
+}
+
+Compaction* RocksCompactionPickerLevelStyle::PickCompactionInternal(
+    Version* version, LogBuffer* log_buffer) {
   Compaction* c = nullptr;
   int level = -1;
 
@@ -1060,21 +1107,12 @@ Compaction* RocksCompactionPicker::PickCompaction(Version* version,
   // Setup "level+1" files (inputs_[1])
   SetupOtherInputs(c);
 
-  // mark all the files that are being compacted
-  c->MarkFilesBeingCompacted(true);
-
-  // Is this compaction creating a file at the bottommost level
-  c->SetupBottomMostLevel(false);
-
-  // remember this currently undergoing compaction
-  compactions_in_progress_[level].insert(c);
-
+  assert(c->level() == level);
   return c;
 }
 
-Compaction* RocksCompactionPicker::PickCompactionBySize(Version* version,
-                                                        int level,
-                                                        double score) {
+Compaction* RocksCompactionPickerLevelStyle::PickCompactionBySize(
+    Version* version, int level, double score) {
   Compaction* c = nullptr;
 
   // level 0 files are overlapping. So we cannot pick more
@@ -1144,6 +1182,387 @@ Compaction* RocksCompactionPicker::PickCompactionBySize(Version* version,
   version->next_file_to_compact_by_size_[level] = nextIndex;
 
   return c;
+}
+
+// Universal style of compaction. Pick files that are contiguous in
+// time-range to compact.
+//
+Compaction* RocksCompactionPickerUniversalStyle::PickCompactionInternal(
+    Version* version, LogBuffer* log_buffer) {
+  int level = 0;
+  double score = version->compaction_score_[0];
+
+  if ((version->files_[level].size() <
+       (unsigned int)options_->level0_file_num_compaction_trigger)) {
+    LogToBuffer(log_buffer, "[%s] Universal: nothing to do\n",
+                version->cfd_->GetName().c_str());
+    return nullptr;
+  }
+  Version::FileSummaryStorage tmp;
+  LogToBuffer(log_buffer, "[%s] Universal: candidate files(%zu): %s\n",
+              version->cfd_->GetName().c_str(), version->files_[level].size(),
+              version->LevelFileSummary(&tmp, 0));
+
+  // Check for size amplification first.
+  Compaction* c;
+  if ((c = PickCompactionUniversalSizeAmp(version, score, log_buffer)) !=
+      nullptr) {
+    LogToBuffer(log_buffer, "[%s] Universal: compacting for size amp\n",
+                version->cfd_->GetName().c_str());
+  } else {
+    // Size amplification is within limits. Try reducing read
+    // amplification while maintaining file size ratios.
+    unsigned int ratio = options_->compaction_options_universal.size_ratio;
+
+    if ((c = PickCompactionUniversalReadAmp(version, score, ratio, UINT_MAX,
+                                            log_buffer)) != nullptr) {
+      LogToBuffer(log_buffer, "[%s] Universal: compacting for size ratio\n",
+                  version->cfd_->GetName().c_str());
+    } else {
+      // Size amplification and file size ratios are within configured limits.
+      // If max read amplification is exceeding configured limits, then force
+      // compaction without looking at filesize ratios and try to reduce
+      // the number of files to fewer than level0_file_num_compaction_trigger.
+      unsigned int num_files = version->files_[level].size() -
+                               options_->level0_file_num_compaction_trigger;
+      if ((c = PickCompactionUniversalReadAmp(
+               version, score, UINT_MAX, num_files, log_buffer)) != nullptr) {
+        LogToBuffer(log_buffer, "[%s] Universal: compacting for file num\n",
+                    version->cfd_->GetName().c_str());
+      }
+    }
+  }
+  if (c == nullptr) {
+    return nullptr;
+  }
+  assert(c->inputs_[0].size() > 1);
+
+  // validate that all the chosen files are non overlapping in time
+  FileMetaData* newerfile __attribute__((unused)) = nullptr;
+  for (unsigned int i = 0; i < c->inputs_[0].size(); i++) {
+    FileMetaData* f = c->inputs_[0][i];
+    assert(f->smallest_seqno <= f->largest_seqno);
+    assert(newerfile == nullptr ||
+           newerfile->smallest_seqno > f->largest_seqno);
+    newerfile = f;
+  }
+
+  // update statistics
+  MeasureTime(options_->statistics.get(), NUM_FILES_IN_SINGLE_COMPACTION,
+              c->inputs_[0].size());
+
+  return c;
+}
+
+uint32_t RocksCompactionPickerUniversalStyle::GetPathId(const Options& options,
+                                              uint64_t file_size) {
+  // Two conditions need to be satisfied:
+  // (1) the target path needs to be able to hold the file's size
+  // (2) Total size left in this and previous paths need to be not
+  //     smaller than expected future file size before this new file is
+  //     compacted, which is estimated based on size_ratio.
+  // For example, if now we are compacting files of size (1, 1, 2, 4, 8),
+  // we will make sure the target file, probably with size of 16, will be
+  // placed in a path so that eventually when new files are generated and
+  // compacted to (1, 1, 2, 4, 8, 16), all those files can be stored in or
+  // before the path we chose.
+  //
+  // TODO(sdong): now the case of multiple column families is not
+  // considered in this algorithm. So the target size can be violated in
+  // that case. We need to improve it.
+  uint64_t accumulated_size = 0;
+  uint64_t future_size =
+      file_size * (100 - options.compaction_options_universal.size_ratio) / 100;
+  uint32_t p = 0;
+  for (; p < options.db_paths.size() - 1; p++) {
+    uint64_t target_size = options.db_paths[p].target_size;
+    if (target_size > file_size &&
+        accumulated_size + (target_size - file_size) > future_size) {
+      return p;
+    }
+    accumulated_size += target_size;
+  }
+  return p;
+}
+
+void RocksCompactionPickerUniversalStyle::SetupBottomMostLevelInternal(
+    Compaction* c) {
+  // Is the earliest file part of this compaction?
+  assert(c->level() == 0);
+  FileMetaData* last_file = c->input_version_->files_[c->level()].back();
+  c->bottommost_level_ = (c->inputs_[0].files.back() == last_file);
+}
+
+//
+// Consider compaction files based on their size differences with
+// the next file in time order.
+//
+Compaction* RocksCompactionPickerUniversalStyle::PickCompactionUniversalReadAmp(
+    Version* version, double score, unsigned int ratio,
+    unsigned int max_number_of_files_to_compact, LogBuffer* log_buffer) {
+  int level = 0;
+
+  unsigned int min_merge_width =
+    options_->compaction_options_universal.min_merge_width;
+  unsigned int max_merge_width =
+    options_->compaction_options_universal.max_merge_width;
+
+  // The files are sorted from newest first to oldest last.
+  const auto& files = version->files_[level];
+
+  FileMetaData* f = nullptr;
+  bool done = false;
+  int start_index = 0;
+  unsigned int candidate_count = 0;
+
+  unsigned int max_files_to_compact = std::min(max_merge_width,
+                                       max_number_of_files_to_compact);
+  min_merge_width = std::max(min_merge_width, 2U);
+
+  // Considers a candidate file only if it is smaller than the
+  // total size accumulated so far.
+  for (unsigned int loop = 0; loop < files.size(); loop++) {
+    candidate_count = 0;
+
+    // Skip files that are already being compacted
+    for (f = nullptr; loop < files.size(); loop++) {
+      f = files[loop];
+
+      if (!f->being_compacted) {
+        candidate_count = 1;
+        break;
+      }
+      LogToBuffer(log_buffer, "[%s] Universal: file %" PRIu64
+                              "[%d] being compacted, skipping",
+                  version->cfd_->GetName().c_str(), f->fd.GetNumber(), loop);
+      f = nullptr;
+    }
+
+    // This file is not being compacted. Consider it as the
+    // first candidate to be compacted.
+    uint64_t candidate_size =  f != nullptr? f->compensated_file_size : 0;
+    if (f != nullptr) {
+      LogToBuffer(
+          log_buffer, "[%s] Universal: Possible candidate file %s[%d].",
+          version->cfd_->GetName().c_str(),
+          FormatFileNumber(f->fd.GetNumber(), f->fd.GetPathId()).c_str(), loop);
+    }
+
+    // Check if the suceeding files need compaction.
+    for (unsigned int i = loop + 1;
+         candidate_count < max_files_to_compact && i < files.size(); i++) {
+      FileMetaData* f = files[i];
+      if (f->being_compacted) {
+        break;
+      }
+      // Pick files if the total/last candidate file size (increased by the
+      // specified ratio) is still larger than the next candidate file.
+      // candidate_size is the total size of files picked so far with the
+      // default kCompactionStopStyleTotalSize; with
+      // kCompactionStopStyleSimilarSize, it's simply the size of the last
+      // picked file.
+      uint64_t sz = (candidate_size * (100L + ratio)) /100;
+      if (sz < f->fd.GetFileSize()) {
+        break;
+      }
+      if (options_->compaction_options_universal.stop_style ==
+          kCompactionStopStyleSimilarSize) {
+        // Similar-size stopping rule: also check the last picked file isn't
+        // far larger than the next candidate file.
+        sz = (f->fd.GetFileSize() * (100L + ratio)) / 100;
+        if (sz < candidate_size) {
+          // If the small file we've encountered begins a run of similar-size
+          // files, we'll pick them up on a future iteration of the outer
+          // loop. If it's some lonely straggler, it'll eventually get picked
+          // by the last-resort read amp strategy which disregards size ratios.
+          break;
+        }
+        candidate_size = f->compensated_file_size;
+      } else {  // default kCompactionStopStyleTotalSize
+        candidate_size += f->compensated_file_size;
+      }
+      candidate_count++;
+    }
+
+    // Found a series of consecutive files that need compaction.
+    if (candidate_count >= (unsigned int)min_merge_width) {
+      start_index = loop;
+      done = true;
+      break;
+    } else {
+      for (unsigned int i = loop;
+           i < loop + candidate_count && i < files.size(); i++) {
+        FileMetaData* f = files[i];
+        LogToBuffer(log_buffer, "[%s] Universal: Skipping file %" PRIu64
+                                "[%d] with size %" PRIu64
+                                " (compensated size %" PRIu64 ") %d\n",
+                    version->cfd_->GetName().c_str(), f->fd.GetNumber(), i,
+                    f->fd.GetFileSize(), f->compensated_file_size,
+                    f->being_compacted);
+      }
+    }
+  }
+  if (!done || candidate_count <= 1) {
+    return nullptr;
+  }
+  unsigned int first_index_after = start_index + candidate_count;
+  // Compression is enabled if files compacted earlier already reached
+  // size ratio of compression.
+  bool enable_compression = true;
+  int ratio_to_compress =
+      options_->compaction_options_universal.compression_size_percent;
+  if (ratio_to_compress >= 0) {
+    uint64_t total_size = version->NumLevelBytes(level);
+    uint64_t older_file_size = 0;
+    for (unsigned int i = files.size() - 1;
+         i >= first_index_after; i--) {
+      older_file_size += files[i]->fd.GetFileSize();
+      if (older_file_size * 100L >= total_size *
+          static_cast<int64_t>(ratio_to_compress)) {
+        enable_compression = false;
+        break;
+      }
+    }
+  }
+
+  uint64_t estimated_total_size = 0;
+  for (unsigned int i = 0; i < first_index_after; i++) {
+    estimated_total_size += files[i]->fd.GetFileSize();
+  }
+  uint32_t path_id = GetPathId(*options_, estimated_total_size);
+
+  Compaction* c = new Compaction(
+      version, level, level, MaxFileSizeForLevel(level), LLONG_MAX, path_id,
+      GetCompressionType(*options_, level, enable_compression));
+  c->score_ = score;
+
+  for (unsigned int i = start_index; i < first_index_after; i++) {
+    FileMetaData* f = c->input_version_->files_[level][i];
+    c->inputs_[0].files.push_back(f);
+    LogToBuffer(log_buffer,
+                "[%s] Universal: Picking file %s[%d] "
+                "with size %" PRIu64 " (compensated size %" PRIu64 ")\n",
+                version->cfd_->GetName().c_str(),
+                FormatFileNumber(f->fd.GetNumber(), f->fd.GetPathId()).c_str(),
+                i, f->fd.GetFileSize(), f->compensated_file_size);
+  }
+  return c;
+}
+
+// Look at overall size amplification. If size amplification
+// exceeeds the configured value, then do a compaction
+// of the candidate files all the way upto the earliest
+// base file (overrides configured values of file-size ratios,
+// min_merge_width and max_merge_width).
+//
+Compaction* RocksCompactionPickerUniversalStyle::PickCompactionUniversalSizeAmp(
+    Version* version, double score, LogBuffer* log_buffer) {
+  int level = 0;
+
+  // percentage flexibilty while reducing size amplification
+  uint64_t ratio = options_->compaction_options_universal.
+                     max_size_amplification_percent;
+
+  // The files are sorted from newest first to oldest last.
+  const auto& files = version->files_[level];
+
+  unsigned int candidate_count = 0;
+  uint64_t candidate_size = 0;
+  unsigned int start_index = 0;
+  FileMetaData* f = nullptr;
+
+  // Skip files that are already being compacted
+  for (unsigned int loop = 0; loop < files.size() - 1; loop++) {
+    f = files[loop];
+    if (!f->being_compacted) {
+      start_index = loop;         // Consider this as the first candidate.
+      break;
+    }
+    LogToBuffer(log_buffer, "[%s] Universal: skipping file %s[%d] compacted %s",
+                version->cfd_->GetName().c_str(),
+                FormatFileNumber(f->fd.GetNumber(), f->fd.GetPathId()).c_str(),
+                loop, " cannot be a candidate to reduce size amp.\n");
+    f = nullptr;
+  }
+  if (f == nullptr) {
+    return nullptr;             // no candidate files
+  }
+
+  LogToBuffer(log_buffer, "[%s] Universal: First candidate file %s[%d] %s",
+              version->cfd_->GetName().c_str(),
+              FormatFileNumber(f->fd.GetNumber(), f->fd.GetPathId()).c_str(),
+              start_index, " to reduce size amp.\n");
+
+  // keep adding up all the remaining files
+  for (unsigned int loop = start_index; loop < files.size() - 1; loop++) {
+    f = files[loop];
+    if (f->being_compacted) {
+      LogToBuffer(
+          log_buffer, "[%s] Universal: Possible candidate file %s[%d] %s.",
+          version->cfd_->GetName().c_str(),
+          FormatFileNumber(f->fd.GetNumber(), f->fd.GetPathId()).c_str(), loop,
+          " is already being compacted. No size amp reduction possible.\n");
+      return nullptr;
+    }
+    candidate_size += f->compensated_file_size;
+    candidate_count++;
+  }
+  if (candidate_count == 0) {
+    return nullptr;
+  }
+
+  // size of earliest file
+  uint64_t earliest_file_size = files.back()->fd.GetFileSize();
+
+  // size amplification = percentage of additional size
+  if (candidate_size * 100 < ratio * earliest_file_size) {
+    LogToBuffer(
+        log_buffer,
+        "[%s] Universal: size amp not needed. newer-files-total-size %" PRIu64
+        "earliest-file-size %" PRIu64,
+        version->cfd_->GetName().c_str(), candidate_size, earliest_file_size);
+    return nullptr;
+  } else {
+    LogToBuffer(
+        log_buffer,
+        "[%s] Universal: size amp needed. newer-files-total-size %" PRIu64
+        "earliest-file-size %" PRIu64,
+        version->cfd_->GetName().c_str(), candidate_size, earliest_file_size);
+  }
+  assert(start_index >= 0 && start_index < files.size() - 1);
+
+  // Estimate total file size
+  uint64_t estimated_total_size = 0;
+  for (unsigned int loop = start_index; loop < files.size(); loop++) {
+    estimated_total_size += files[loop]->fd.GetFileSize();
+  }
+  uint32_t path_id = GetPathId(*options_, estimated_total_size);
+
+  // create a compaction request
+  // We always compact all the files, so always compress.
+  Compaction* c =
+      new Compaction(version, level, level, MaxFileSizeForLevel(level),
+                     LLONG_MAX, path_id, GetCompressionType(*options_, level));
+  c->score_ = score;
+  for (unsigned int loop = start_index; loop < files.size(); loop++) {
+    f = c->input_version_->files_[level][loop];
+    c->inputs_[0].files.push_back(f);
+    LogToBuffer(log_buffer,
+        "[%s] Universal: size amp picking file %" PRIu64 "[%d] "
+        "with size %" PRIu64 " (compensated size %" PRIu64 ")",
+        version->cfd_->GetName().c_str(),
+        f->fd.GetNumber(), loop,
+        f->fd.GetFileSize(), f->compensated_file_size);
+  }
+  return c;
+}
+
+void RocksCompactionPickerUniversalStyle::SetupFullCompaction(
+    Compaction* c) {
+  // Record whether this compaction includes all sst files.
+  // For now, it is only relevant in universal compaction mode.
+  c->is_full_compaction_ =
+      (c->inputs_[0].size() == c->input_version_->files_[0].size());
 }
 
 }  // namespace rocksdb

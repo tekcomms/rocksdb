@@ -202,6 +202,9 @@ class FIFOCompactionPicker : public CompactionPicker {
   }
 };
 
+// The base class of the new compaction
+// TODO(yhchiang): replace the current CompactionPicker in the future if
+//                 we find it suitable.
 class RocksCompactionPicker : public CompactionPicker {
  public:
   RocksCompactionPicker(const Options* options,
@@ -210,11 +213,57 @@ class RocksCompactionPicker : public CompactionPicker {
   virtual Compaction* PickCompaction(Version* version,
                                      LogBuffer* log_buffer) override;
 
+  // Returns true if manual compaction always involves in all files.
+  virtual bool FullCompactionOnManual() const = 0;
+
+ protected:
+  // the helper function of PickCompaction
+  virtual Compaction* PickCompactionInternal(
+      Version* version, LogBuffer* log_buffer) = 0;
+
+  // Set c->bottommost_level_ to true / false based on whether the compaction
+  // includes files in the bottom-most level.
+  virtual void SetupBottomMostLevelInternal(Compaction* c) = 0;
+
+  // Set c->is_full_cmpaction_ to true / false based on whether the current
+  // compaction is considered full compaction.
+  virtual void SetupFullCompaction(Compaction* c) = 0;
+
+ private:
+  // Initialize whether the compaction is producing files at the
+  // bottommost level.
+  void SetupBottomMostLevel(
+      Compaction* c, bool is_manual_compaction);
+};
+
+class RocksCompactionPickerLevelStyle : public RocksCompactionPicker {
+ public:
+  RocksCompactionPickerLevelStyle(const Options* options,
+                                  const InternalKeyComparator* icmp)
+      : RocksCompactionPicker(options, icmp) {}
+
+  // Always returns false, indicating manual compaction MAY NOT includes
+  // all files.
+  virtual bool FullCompactionOnManual() const override { return false; }
+
   // Returns current_num_levels - 2, meaning the last level cannot be
   // compaction input level.
   virtual int MaxInputLevel(int current_num_levels) const override {
     return current_num_levels - 2;
   }
+
+ protected:
+  // the helper function of PickCompaction
+  virtual Compaction* PickCompactionInternal(
+      Version* version, LogBuffer* log_buffer) override;
+
+  // Set c->bottommost_level_ to true / false based on whether the compaction
+  // includes files in the bottom-most level.
+  virtual void SetupBottomMostLevelInternal(Compaction* c) override;
+
+  // Always set c->is_full_cmpaction_ to false, meaning there would be no
+  // full compaction.
+  virtual void SetupFullCompaction(Compaction* c) override {}
 
  private:
   // For the specfied level, pick a compaction.
@@ -222,6 +271,50 @@ class RocksCompactionPicker : public CompactionPicker {
   // If level is 0 and there is already a compaction on that level, this
   // function will return nullptr.
   Compaction* PickCompactionBySize(Version* version, int level, double score);
+};
+
+class RocksCompactionPickerUniversalStyle : public RocksCompactionPicker {
+ public:
+  RocksCompactionPickerUniversalStyle(const Options* options,
+                                      const InternalKeyComparator* icmp)
+      : RocksCompactionPicker(options, icmp) {}
+
+  // ALways returns true, indicating manual compaction always includes
+  // in all files.
+  virtual bool FullCompactionOnManual() const override { return true; }
+
+  // The maxinum allowed input level.  Always return 0.
+  virtual int MaxInputLevel(int current_num_levels) const override {
+    return 0;
+  }
+
+ protected:
+  // the helper function of PickCompaction
+  virtual Compaction* PickCompactionInternal(
+      Version* version, LogBuffer* log_buffer) override;
+
+  // Set c->bottommost_level_ to true / false based on whether the compaction
+  // includes files in the bottom-most level.
+  virtual void SetupBottomMostLevelInternal(Compaction* c) override;
+
+  // Set c->bottommost_level_ to true / false based on whether the compaction
+  // includes files in the bottom-most level.
+  virtual void SetupFullCompaction(Compaction* c) override;
+
+ private:
+  // Pick Universal compaction to limit read amplification
+  Compaction* PickCompactionUniversalReadAmp(Version* version, double score,
+                                             unsigned int ratio,
+                                             unsigned int num_files,
+                                             LogBuffer* log_buffer);
+
+  // Pick Universal compaction to limit space amplification.
+  Compaction* PickCompactionUniversalSizeAmp(Version* version, double score,
+                                             LogBuffer* log_buffer);
+
+  // Pick a path ID to place a newly generated file, with its estimated file
+  // size.
+  static uint32_t GetPathId(const Options& options, uint64_t file_size);
 };
 
 }  // namespace rocksdb
