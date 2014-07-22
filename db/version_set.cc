@@ -2824,13 +2824,17 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  // TODO(yhchiang): maybe add FilesHaveOverlappingRange(int which)
+  //                 to CompactionPicker?
   const int space = (c->level() == 0 ? c->input_levels(0)->num_files + 1 : 2);
   Iterator** list = new Iterator*[space];
   int num = 0;
-  for (int which = 0; which < 2; which++) {
+  for (int which = 0; which < c->num_input_levels(); which++) {
     if (c->input_levels(which)->num_files != 0) {
       if (c->level(which) == 0) {
         const FileLevel* flevel = c->input_levels(which);
+        // create one iterator for each file as files have overlapping
+        // key ranges in L0
         for (size_t i = 0; i < flevel->num_files; i++) {
           list[num++] = cfd->table_cache()->NewIterator(
               read_options, storage_options_compactions_,
@@ -2838,7 +2842,8 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
               true /* for compaction */);
         }
       } else {
-        // Create concatenating iterator for the files from this level
+        // As files in any level > 0 have total order, we can create a single
+        // concatenating iterator.
         list[num++] = NewTwoLevelIterator(new Version::LevelFileIteratorState(
               cfd->table_cache(), read_options, storage_options_,
               cfd->internal_comparator(), true /* for_compaction */,

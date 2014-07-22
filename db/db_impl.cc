@@ -2338,6 +2338,7 @@ void DBImpl::AllocateCompactionOutputFileNumbers(CompactionState* compact) {
   mutex_.AssertHeld();
   assert(compact != nullptr);
   assert(compact->builder == nullptr);
+  // TODO(yhchiang): it might be better to bring this into compaction picker
   int filesNeeded = compact->compaction->num_input_files(
       compact->compaction->num_input_levels() - 1);
   for (int i = 0; i < std::max(filesNeeded, 1); i++) {
@@ -2951,31 +2952,33 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
   log_buffer->FlushBufferToLog();
 
   const uint64_t start_micros = env_->NowMicros();
+
+  // create iterators for compaction input files.
   unique_ptr<Iterator> input(versions_->MakeInputIterator(compact->compaction));
   input->SeekToFirst();
   shared_ptr<Iterator> backup_input(
       versions_->MakeInputIterator(compact->compaction));
   backup_input->SeekToFirst();
 
-  Status status;
-  ParsedInternalKey ikey;
-  std::unique_ptr<CompactionFilterV2> compaction_filter_from_factory_v2
-    = nullptr;
+  // create compaction filter
   auto context = compact->GetFilterContext();
-  compaction_filter_from_factory_v2 =
-      cfd->options()->compaction_filter_factory_v2->CreateCompactionFilterV2(
-          context);
+  std::unique_ptr<CompactionFilterV2> compaction_filter_from_factory_v2 =
+      cfd->options()->compaction_filter_factory_v2->
+          CreateCompactionFilterV2(context);
   auto compaction_filter_v2 =
     compaction_filter_from_factory_v2.get();
 
-  // temp_backup_input always point to the start of the current buffer
-  // temp_backup_input = backup_input;
   // iterate through input,
   // 1) buffer ineligible keys and value keys into 2 separate buffers;
   // 2) send value_buffer to compaction filter and alternate the values;
   // 3) merge value_buffer with ineligible_value_buffer;
   // 4) run the modified "compaction" using the old for loop.
+  Status status;
+  ParsedInternalKey ikey;
   if (compaction_filter_v2) {
+    const SliceTransform* transformer =
+        cfd->options()->compaction_filter_factory_v2->GetPrefixExtractor();
+
     while (backup_input->Valid() && !shutting_down_.Acquire_Load() &&
            !cfd->IsDropped()) {
       // FLUSH preempts compaction
@@ -2987,8 +2990,8 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
       Slice key = backup_input->key();
       Slice value = backup_input->value();
 
-      const SliceTransform* transformer =
-          cfd->options()->compaction_filter_factory_v2->GetPrefixExtractor();
+      // Extract the prefix of the current key, and build compaction batch
+      // where kv pairs in the same batch have the same previx.
       const auto key_prefix = transformer->Transform(key);
       if (!prefix_initialized) {
         compact->cur_prefix_ = key_prefix.ToString();
@@ -3032,17 +3035,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
       // Done buffering for the current prefix. Spit it out to disk
       // Now just iterate through all the kv-pairs
       status = ProcessKeyValueCompaction(
-          is_snapshot_supported,
-          visible_at_tip,
-          earliest_snapshot,
-          latest_snapshot,
-          deletion_state,
-          bottommost_level,
-          imm_micros,
-          input.get(),
-          compact,
-          true,
-          log_buffer);
+          is_snapshot_supported, visible_at_tip, earliest_snapshot,
+          latest_snapshot, deletion_state, bottommost_level,
+          imm_micros, input.get(), compact, true, log_buffer);
 
       if (!status.ok()) {
         break;
@@ -3052,6 +3047,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
       // to the string buffer and clean them up
       compact->CleanupBatchBuffer();
       compact->CleanupMergedBuffer();
+
       // Buffer the key that triggers the mismatch in prefix
       if (ikey.type == kTypeValue &&
         (visible_at_tip || ikey.sequence > latest_snapshot)) {
@@ -3059,6 +3055,7 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
       } else {
         compact->BufferOtherKeyValueSlices(key, value);
       }
+
       backup_input->Next();
       if (!backup_input->Valid()) {
         // If this is the single last value, we need to merge it.
@@ -3068,17 +3065,9 @@ Status DBImpl::DoCompactionWork(CompactionState* compact,
         compact->MergeKeyValueSliceBuffer(&cfd->internal_comparator());
 
         status = ProcessKeyValueCompaction(
-            is_snapshot_supported,
-            visible_at_tip,
-            earliest_snapshot,
-            latest_snapshot,
-            deletion_state,
-            bottommost_level,
-            imm_micros,
-            input.get(),
-            compact,
-            true,
-            log_buffer);
+            is_snapshot_supported, visible_at_tip, earliest_snapshot,
+            latest_snapshot, deletion_state, bottommost_level,
+            imm_micros, input.get(), compact, true, log_buffer);
 
         compact->CleanupBatchBuffer();
         compact->CleanupMergedBuffer();
