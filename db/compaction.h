@@ -193,7 +193,7 @@ class Compaction {
   autovector<CompactionInputFiles> inputs_;
 
   // A copy of inputs_, organized more closely in memory
-  autovector<FileLevel, 2> input_levels_;
+  autovector<FileLevel> input_levels_;
 
   // State used to check for number of of overlapping grandparent files
   // (grandparent == "output_level_ + 1")

@@ -66,6 +66,7 @@ Compaction::Compaction(Version* input_version, int start_level, int out_level,
   for (int i = 0; i < num_levels; ++i) {
     inputs_[i].level = start_level_ + i;
   }
+  input_levels_.resize(num_levels);
 }
 
 Compaction::~Compaction() {
@@ -110,8 +111,7 @@ void Compaction::AddInputDeletions(VersionEdit* edit) {
 
 bool Compaction::KeyNotExistsBeyondOutputLevel(const Slice& user_key) {
   assert(cfd_->options()->compaction_style != kCompactionStyleFIFO);
-  if (cfd_->options()->compaction_style == kCompactionStyleUniversal ||
-      cfd_->options()->compaction_style == kCompactionStyleRocksUniversal) {
+  if (cfd_->options()->compaction_style == kCompactionStyleUniversal) {
     return bottommost_level_;
   }
   // Maybe use binary search to find right entry instead of linear search?
@@ -175,8 +175,7 @@ void Compaction::MarkFilesBeingCompacted(bool mark_as_compacted) {
 // Is this compaction producing files at the bottommost level?
 void Compaction::SetupBottomMostLevel(bool is_manual) {
   assert(cfd_->options()->compaction_style != kCompactionStyleFIFO);
-  if (cfd_->options()->compaction_style == kCompactionStyleUniversal ||
-      cfd_->options()->compaction_style == kCompactionStyleRocksUniversal) {
+  if (cfd_->options()->compaction_style == kCompactionStyleUniversal) {
     // If universal compaction style is used and manual
     // compaction is occuring, then we are guaranteed that
     // all files will be picked in a single compaction

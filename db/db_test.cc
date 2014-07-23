@@ -2846,14 +2846,14 @@ TEST(DBTest, CompactionDeletionTrigger) {
         break;
       case 2:
         options.compaction_style = kCompactionStyleRocksUniversal;
-        options.num_levels = 1;
+        options.num_levels = 50;
         break;
     }
   }
 }
 
 TEST(DBTest, CompactionDeletionTriggerReopen) {
-  for (int tid = 0; tid < 2; ++tid) {
+  for (int tid = 0; tid < 4; ++tid) {
     uint64_t db_size[3];
     Options options = DeletionTriggerOptions();
     options.create_if_missing = true;
@@ -2902,8 +2902,20 @@ TEST(DBTest, CompactionDeletionTriggerReopen) {
     ASSERT_GT(db_size[0] / 3, db_size[2]);
 
     // repeat the test with universal compaction
-    options.compaction_style = kCompactionStyleUniversal;
-    options.num_levels = 1;
+    switch (tid) {
+      case 0:
+        options.compaction_style = kCompactionStyleUniversal;
+        options.num_levels = 1;
+        break;
+      case 1:
+        options.compaction_style = kCompactionStyleRocksLevel;
+        options.num_levels = 8;
+        break;
+      case 2:
+        options.compaction_style = kCompactionStyleRocksUniversal;
+        options.num_levels = 50;
+        break;
+    }
   }
 }
 
