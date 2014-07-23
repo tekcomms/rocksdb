@@ -107,6 +107,7 @@ TESTS = \
 	backupable_db_test \
 	document_db_test \
 	json_document_test \
+	spatial_db_test \
 	version_edit_test \
 	version_set_test \
 	file_indexer_test \
@@ -114,9 +115,10 @@ TESTS = \
 	deletefile_test \
 	table_test \
 	thread_local_test \
-        geodb_test \
-        rate_limiter_test \
-	cuckoo_table_builder_test
+	geodb_test \
+  rate_limiter_test \
+	cuckoo_table_builder_test \
+	options_test
 
 TOOLS = \
         sst_dump \
@@ -124,6 +126,7 @@ TOOLS = \
         db_stress \
         ldb \
 	db_repl_stress \
+  options_test \
 	blob_store_bench
 
 PROGRAMS = db_bench signal_test table_reader_bench log_and_apply_bench $(TOOLS)
@@ -151,7 +154,7 @@ SHARED = $(SHARED1)
 else
 # Update db.h if you change these.
 SHARED_MAJOR = 3
-SHARED_MINOR = 3
+SHARED_MINOR = 4
 SHARED1 = ${LIBNAME}.$(PLATFORM_SHARED_EXT)
 SHARED2 = $(SHARED1).$(SHARED_MAJOR)
 SHARED3 = $(SHARED1).$(SHARED_MAJOR).$(SHARED_MINOR)
@@ -357,6 +360,9 @@ document_db_test: utilities/document/document_db_test.o $(LIBOBJECTS) $(TESTHARN
 json_document_test: utilities/document/json_document_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(CXX) utilities/document/json_document_test.o $(LIBOBJECTS) $(TESTHARNESS) $(EXEC_LDFLAGS) -o $@  $(LDFLAGS) $(COVERAGEFLAGS)
 
+spatial_db_test: utilities/spatialdb/spatial_db_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(CXX) utilities/spatialdb/spatial_db_test.o $(LIBOBJECTS) $(TESTHARNESS) $(EXEC_LDFLAGS) -o $@  $(LDFLAGS) $(COVERAGEFLAGS)
+
 ttl_test: utilities/ttl/ttl_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(CXX) utilities/ttl/ttl_test.o $(LIBOBJECTS) $(TESTHARNESS) $(EXEC_LDFLAGS) -o $@  $(LDFLAGS) $(COVERAGEFLAGS)
 
@@ -414,6 +420,9 @@ geodb_test: utilities/geodb/geodb_test.o $(LIBOBJECTS) $(TESTHARNESS)
 cuckoo_table_builder_test: table/cuckoo_table_builder_test.o $(LIBOBJECTS) $(TESTHARNESS)
 	$(CXX) table/cuckoo_table_builder_test.o  $(LIBOBJECTS) $(TESTHARNESS) $(EXEC_LDFLAGS) -o $@ $(LDFLAGS) $(COVERAGEFLAGS)
 
+options_test: util/options_test.o $(LIBOBJECTS) $(TESTHARNESS)
+	$(CXX) util/options_test.o $(LIBOBJECTS) $(TESTHARNESS) $(EXEC_LDFLAGS) -o $@ $(LDFLAGS) $(COVERAGEFLAGS)
+
 $(MEMENVLIBRARY) : $(MEMENVOBJECTS)
 	rm -f $@
 	$(AR) -rs $@ $(MEMENVOBJECTS)
@@ -449,6 +458,7 @@ ldb: tools/ldb.o $(LIBOBJECTS)
 JNI_NATIVE_SOURCES = ./java/rocksjni/*.cc
 JAVA_INCLUDE = -I$(JAVA_HOME)/include/ -I$(JAVA_HOME)/include/linux
 ROCKSDBJNILIB = librocksdbjni.so
+ROCKSDB_JAR = rocksdbjni.jar
 
 ifeq ($(PLATFORM), OS_MACOSX)
 ROCKSDBJNILIB = librocksdbjni.jnilib
