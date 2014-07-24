@@ -23,7 +23,7 @@ public class StatisticsCollectorTest {
 
     StatsCallbackMock callback = new StatsCallbackMock();
     StatsCollectorInput statsInput = new StatsCollectorInput(stats, callback);
-    
+
     StatisticsCollector statsCollector = new StatisticsCollector(
         Collections.singletonList(statsInput), 100);
     statsCollector.start();

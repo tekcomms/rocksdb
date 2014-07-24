@@ -83,8 +83,8 @@ Compaction::~Compaction() {
 }
 
 void Compaction::GenerateFileLevels() {
-  input_levels_.resize(2);
-  for (int which = 0; which < 2; which++) {
+  input_levels_.resize(inputs_.size());
+  for (size_t which = 0; which < inputs_.size(); which++) {
     DoGenerateFileLevel(&input_levels_[which], inputs_[which].files, &arena_);
   }
 }

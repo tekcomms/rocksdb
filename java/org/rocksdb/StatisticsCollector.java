@@ -29,7 +29,7 @@ public class StatisticsCollector {
 
   /**
    * Constructor for statistics collector.
-   * 
+   *
    * @param statsCollectorInputList List of statistics collector input.
    * @param statsCollectionIntervalInMilliSeconds Statistics collection time 
    *        period (specified in milliseconds).
@@ -67,7 +67,7 @@ public class StatisticsCollector {
               Statistics statistics = statsCollectorInput.getStatistics();
               StatisticsCollectorCallback statsCallback =
                   statsCollectorInput.getCallback();
-              
+
                 // Collect ticker data
               for(TickerType ticker : TickerType.values()) {
                 long tickerValue = statistics.getTickerCount(ticker);

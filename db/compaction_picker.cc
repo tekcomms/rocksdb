@@ -1192,12 +1192,13 @@ Compaction* RocksCompactionPickerUniversalStyle::PickCompactionInternal(
   int level = 0;
   double score = version->compaction_score_[0];
 
+  /*
   if ((version->files_[level].size() <
        (unsigned int)options_->level0_file_num_compaction_trigger)) {
     LogToBuffer(log_buffer, "[%s] Universal: nothing to do\n",
                 version->cfd_->GetName().c_str());
     return nullptr;
-  }
+  }*/
   Version::FileSummaryStorage tmp;
   LogToBuffer(log_buffer, "[%s] Universal: candidate files(%zu): %s\n",
               version->cfd_->GetName().c_str(), version->files_[level].size(),
@@ -1467,64 +1468,52 @@ Compaction* RocksCompactionPickerUniversalStyle::PickCompactionUniversalSizeAmp(
     Version* version, double score, LogBuffer* log_buffer) {
   int start_input_level = -1;
   int last_input_level = 0;
-  int last_level_with_files = 0;
-  int num_input_files = 0;
+  int first_level_with_files = -1;
   // the size in [start_input_level, last_input_level]
   uint64_t estimated_total_size = 0;
   // the compensated size in [start_input_level, last_input_level]
   uint64_t candidate_csize = 0;
-  // the size in last_input_level + 1
-  uint64_t next_level_size = 0;
   const unsigned int ratio = options_->compaction_options_universal.size_ratio;
 
   for (int level = 0; level < version->NumberLevels(); ++level) {
     if (version->files_[level].size() > 0) {
-      last_level_with_files = level;
-      if (start_input_level < 0) {
-        start_input_level = level;
-      }
+      first_level_with_files = level;
+      break;
     }
   }
+  if (first_level_with_files < 0) {
+    return nullptr;
+  }
 
-  if (last_level_with_files - start_input_level + 1 >= 2) {
-    for (int level = start_input_level;
-         level <= last_level_with_files; ++level) {
-      uint64_t current_level_size = 0;
-      uint64_t current_level_csize = 0;
-      for (auto* file_meta : version->files_[level]) {
-        if (file_meta->being_compacted) {
-          // TODO(yhchiang): currently, only allow one compaction at a time
-          return nullptr;
-        }
-        current_level_size += file_meta->fd.GetFileSize();
-        current_level_csize += file_meta->compensated_file_size;
-      }
-      if (level <= 1 ||
-          candidate_csize * 100 >= current_level_size * (100U - ratio)) {
-        // expend the compaction to include the next level
-        // "level <= 1" allows L0 files to be always able to be
-        // compacted with L1 files.
-        candidate_csize += current_level_csize;
-        estimated_total_size += current_level_size;
-        last_input_level = level;
-      } else {
-        next_level_size = current_level_size;
-        break;
-      }
-    }
-  } else {
-    // Compaction from L0 to L1 will always be triggered when num_level == 1
-    assert(version->files_[0].size() >=
-           static_cast<size_t>(options_->level0_file_num_compaction_trigger));
-    for (auto* file_meta : version->files_[0]) {
+  for (int level = first_level_with_files;
+       level < version->NumberLevels(); ++level) {
+    uint64_t current_level_size = 0;
+    uint64_t current_level_csize = 0;
+    for (auto* file_meta : version->files_[level]) {
       if (file_meta->being_compacted) {
         // TODO(yhchiang): currently, only allow one compaction at a time
         return nullptr;
       }
-      estimated_total_size += file_meta->fd.GetFileSize();
+      current_level_size += file_meta->fd.GetFileSize();
+      current_level_csize += file_meta->compensated_file_size;
     }
+    if ((candidate_csize + current_level_size) * 100 <
+        MaxBytesForLevel(level) * (100U - ratio)) {
+      break;
+    }
+    if (start_input_level < 0) {
+      start_input_level = level;
+    }
+    last_input_level = std::min(level + 1, version->NumberLevels() - 1);
+    candidate_csize += current_level_csize;
+    estimated_total_size += current_level_size;
+  }
+  if (start_input_level < 0) {
+    return nullptr;
   }
 
+  int num_input_files = 0;
+  // simple check
   for (int level = start_input_level; level <= last_input_level; ++level) {
     num_input_files += version->files_[level].size();
   }
@@ -1534,29 +1523,18 @@ Compaction* RocksCompactionPickerUniversalStyle::PickCompactionUniversalSizeAmp(
 
   uint32_t path_id = GetPathId(*options_, estimated_total_size);
 
-  // If "next_level_size > 0", then we have some files after last_input_level,
-  // in this case we compact files into the current level.
-  int output_level =
-      (next_level_size == 0) ? last_input_level + 1: last_input_level;
-
-  if (output_level > version->NumberLevels() - 1) {
-    // Then we need to append a new level
-    // Or optionally, we could set number of levels to be a very high number.
-    output_level = version->NumberLevels() - 1;
-  }
-
   // create a compaction request
   // We always compact all the files, so always compress.
   Compaction* c = new Compaction(
-      version, start_input_level, output_level,
-      MaxFileSizeForLevel(output_level),
-      LLONG_MAX,  // MaxGrandParentOverlapBytes(output_level - 1)?
-      path_id, GetCompressionType(*options_, output_level));
+      version, start_input_level, last_input_level,
+      MaxFileSizeForLevel(last_input_level),
+      LLONG_MAX,  // MaxGrandParentOverlapBytes(last_input_level)?
+      path_id, GetCompressionType(*options_, last_input_level));
 
   c->score_ = score;
   for (int level = start_input_level; level <= last_input_level; ++level) {
     // TODO(yhchiang): add log
-    for (auto* file_meta : c->input_version_->files_[level]) {
+    for (auto* file_meta : version->files_[level]) {
       c->inputs_[level - start_input_level].files.push_back(file_meta);
     }
   }

@@ -2828,7 +2828,9 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
   // TODO(yhchiang): maybe add FilesHaveOverlappingRange(int which)
   //                 to CompactionPicker?
-  const int space = (c->level() == 0 ? c->input_levels(0)->num_files + 1 : 2);
+  const int space = (c->level() == 0 ?
+      c->input_levels(0)->num_files + c->num_input_levels() :
+      c->num_input_levels() + 1);
   Iterator** list = new Iterator*[space];
   int num = 0;
   for (int which = 0; which < c->num_input_levels(); which++) {

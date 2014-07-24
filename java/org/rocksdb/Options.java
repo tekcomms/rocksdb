@@ -171,8 +171,8 @@ public class Options extends RocksObject {
    * Filter should not be disposed before options instances using this filter is
    * disposed. If dispose() function is not called, then filter object will be
    * GC'd automatically.
-   * 
-   * Filter instance can be re-used in multiple options instances. 
+   *
+   * Filter instance can be re-used in multiple options instances.
    *
    * @param Filter policy java instance.
    * @return the instance of the current Options.
