@@ -434,3 +434,37 @@ jlong Java_org_rocksdb_RocksDB_iterator0(
   rocksdb::Iterator* iterator = db->NewIterator(rocksdb::ReadOptions());
   return reinterpret_cast<jlong>(iterator);
 }
+
+/*
+ * Class:     org_rocksdb_RocksDB
+ * Method:    compactdb
+ * Signature: (J[BI[BI)V
+ */
+void Java_org_rocksdb_RocksDB_compactdb(
+    JNIEnv* env, jobject jdb, jlong jdb_handle,
+    jbyteArray jkey, jint jkey_len,
+    jbyteArray jvalue, jint jvalue_len) {
+
+    auto db = reinterpret_cast<rocksdb::DB*>(jdb_handle);
+
+    rocksdb::Status s;
+    if ( jkey == nullptr || jvalue == nullptr ) {
+        s = db->CompactRange( (rocksdb::Slice *) nullptr, (rocksdb::Slice *) nullptr );
+    }
+    else {
+        jbyte* key = env->GetByteArrayElements(jkey, 0);
+        jbyte* value = env->GetByteArrayElements(jvalue, 0);
+        rocksdb::Slice key_slice(reinterpret_cast<char*>(key), jkey_len);
+        rocksdb::Slice value_slice(reinterpret_cast<char*>(value), jvalue_len);
+
+        s = db->CompactRange(&key_slice, &value_slice);
+
+        env->ReleaseByteArrayElements(jkey, key, JNI_ABORT);
+        env->ReleaseByteArrayElements(jvalue, value, JNI_ABORT);
+    }
+
+    if (s.ok()) {
+       return;
+    }
+    rocksdb::RocksDBExceptionJni::ThrowNew(env, s);
+}

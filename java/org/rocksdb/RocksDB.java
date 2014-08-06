@@ -296,6 +296,10 @@ public class RocksDB extends RocksObject {
     remove(nativeHandle_, writeOpt.nativeHandle_, key, key.length);
   }
 
+  public void compact(byte[] key, byte[] value) throws RocksDBException {
+      compactdb(nativeHandle_, key, key==null?0:key.length, value, value==null?0:value.length );
+  }
+
   /**
    * Return a heap-allocated iterator over the contents of the database.
    * The result of newIterator() is initially invalid (caller must
@@ -360,6 +364,9 @@ public class RocksDB extends RocksObject {
   protected native void remove(
       long handle, long writeOptHandle,
       byte[] key, int keyLen) throws RocksDBException;
+  protected native void compactdb(
+      long handle, byte[] key, int keyLen,
+      byte[] value, int valueLen) throws RocksDBException;;
   protected native long iterator0(long optHandle);
   private native void disposeInternal(long handle);
 
