@@ -296,8 +296,8 @@ public class RocksDB extends RocksObject {
     remove(nativeHandle_, writeOpt.nativeHandle_, key, key.length);
   }
 
-  public void compact(byte[] key, byte[] value) throws RocksDBException {
-      compactdb(nativeHandle_, key, key==null?0:key.length, value, value==null?0:value.length );
+  public void compactRange(byte[] key, byte[] value) throws RocksDBException {
+      compactRange(nativeHandle_, key, key==null?0:key.length, value, value==null?0:value.length );
   }
 
   /**
@@ -364,9 +364,9 @@ public class RocksDB extends RocksObject {
   protected native void remove(
       long handle, long writeOptHandle,
       byte[] key, int keyLen) throws RocksDBException;
-  protected native void compactdb(
-      long handle, byte[] key, int keyLen,
-      byte[] value, int valueLen) throws RocksDBException;;
+  protected native void compactRange(
+      long handle, byte[] begin, int beginLen,
+      byte[] end, int endLen) throws RocksDBException;;
   protected native long iterator0(long optHandle);
   private native void disposeInternal(long handle);
 

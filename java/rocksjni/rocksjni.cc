@@ -440,27 +440,27 @@ jlong Java_org_rocksdb_RocksDB_iterator0(
  * Method:    compactdb
  * Signature: (J[BI[BI)V
  */
-void Java_org_rocksdb_RocksDB_compactdb(
+void Java_org_rocksdb_RocksDB_compactRange(
     JNIEnv* env, jobject jdb, jlong jdb_handle,
-    jbyteArray jkey, jint jkey_len,
-    jbyteArray jvalue, jint jvalue_len) {
+    jbyteArray jbegin, jint jbegin_len,
+    jbyteArray jend, jint jend_len) {
 
     auto db = reinterpret_cast<rocksdb::DB*>(jdb_handle);
 
     rocksdb::Status s;
-    if ( jkey == nullptr || jvalue == nullptr ) {
+    if ( jbegin == nullptr || jend == nullptr ) {
         s = db->CompactRange( (rocksdb::Slice *) nullptr, (rocksdb::Slice *) nullptr );
     }
     else {
-        jbyte* key = env->GetByteArrayElements(jkey, 0);
-        jbyte* value = env->GetByteArrayElements(jvalue, 0);
-        rocksdb::Slice key_slice(reinterpret_cast<char*>(key), jkey_len);
-        rocksdb::Slice value_slice(reinterpret_cast<char*>(value), jvalue_len);
+        jbyte* begin = env->GetByteArrayElements(jbegin, 0);
+        jbyte* end = env->GetByteArrayElements(jend, 0);
+        rocksdb::Slice slice_begin(reinterpret_cast<char*>(begin), jbegin_len);
+        rocksdb::Slice slice_end(reinterpret_cast<char*>(end), jend_len);
 
-        s = db->CompactRange(&key_slice, &value_slice);
+        s = db->CompactRange(&slice_begin, &slice_end);
 
-        env->ReleaseByteArrayElements(jkey, key, JNI_ABORT);
-        env->ReleaseByteArrayElements(jvalue, value, JNI_ABORT);
+        env->ReleaseByteArrayElements(jbegin, begin, JNI_ABORT);
+        env->ReleaseByteArrayElements(jend, end, JNI_ABORT);
     }
 
     if (s.ok()) {

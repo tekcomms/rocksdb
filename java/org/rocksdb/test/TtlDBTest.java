@@ -38,7 +38,8 @@ public class TtlDBTest {
                 Thread.currentThread().interrupt();
             }
 
-            ttldb.compact(null,null);
+            ttldb.compactRange(null,null);
+            //ttldb.compactRange( "key1".getBytes(), "key2".getBytes() );
 
             value = ttldb.get("key1".getBytes());
             assert(value == null);
