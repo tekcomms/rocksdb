@@ -1,0 +1,62 @@
+group = 'org.rocksdb'
+version = 'fbttl3.3-SNAPSHOT'
+description = 'rocksdb Jni'
+
+apply plugin: 'java'
+
+def mvnRepoUrl='http://tekcomms-artifactory.global.tektronix.net:8081/artifactory/libs-snapshot-local'
+
+compileJava {
+    sourceCompatibility = 1.7
+    targetCompatibility = 1.7
+}
+
+sourceSets {
+   main {
+      java {
+	srcDir '.'
+        include 'org/rocksdb/*.java'
+	include 'org/rocksdb/util/*.java'
+      }
+      resources {
+        srcDir '.'
+        include 'HISTORY*.md'
+      }
+   }
+}
+
+
+task cpplibZip(type: Zip) {
+   from "/usr/local/lib/libsnappy.so.1"
+   from "/lib64/libz.so.1"
+   from '/usr/local/lib/libgflags.so.2'
+   from './librocksdbjni.so'
+   
+   baseName = "rocksdbCppLibs"
+   destinationDir = new File("$buildDir/distributions")
+}
+
+
+
+apply plugin: 'maven-publish'
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            artifact cpplibZip {
+               classifier "cpplibs"
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            url "$mvnRepoUrl"
+        }
+    }
+}
+
+task wrapper(type:Wrapper, description:'Generates the Gradle wrapper scripts.'){
+    gradleVersion = '1.12'
+}
