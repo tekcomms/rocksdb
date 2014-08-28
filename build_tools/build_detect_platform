@@ -44,6 +44,10 @@ PLATFORM_CXXFLAGS="-std=c++11"
 # we currently depend on POSIX platform
 COMMON_FLAGS="-DROCKSDB_PLATFORM_POSIX"
 
+if [ -d /opt/centos/devtoolset-1.0/root/usr/bin ]; then
+   source "$PWD/build_tools/devtoolset.gcc.sh"
+fi
+
 # Default to fbcode gcc on internal fb machines
 if [ -d /mnt/gvfs/third-party -a -z "$CXX" ]; then
     FBCODE_BUILD="true"
